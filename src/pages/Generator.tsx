@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  Bird,
   Box,
   Cat,
   ChevronLeft,
   ChevronRight,
   Code2,
   Copy,
+  Database,
   Download,
   Hammer,
   Image as ImageIcon,
@@ -16,29 +16,44 @@ import {
   Rabbit,
   RefreshCw,
   Sparkles,
+  Trash2,
   Upload,
   Wand2,
   X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { normalizeBricks, voxelsToBricks } from '../lib/brickLayout';
 import { Generators } from '../lib/voxelGenerators';
 import { VoxelEngine } from '../services/VoxelEngine';
 import {
   AppState,
+  BrickData,
   BuildHistory,
   LegoPart,
+  PersistedBuildRecord,
   SavedModel,
   VoxelData,
 } from '../types';
 
-const INITIAL_HISTORY: BuildHistory[] = [
-  { id: '1', prompt: 'Eagle', timestamp: Date.now() - 3600000 },
-  { id: '2', prompt: 'Rabbit', timestamp: Date.now() - 7200000 },
-];
+const INITIAL_HISTORY: BuildHistory[] = [];
 
 type PromptMode = 'create' | 'morph';
 type JsonMode = 'import' | 'export' | null;
 type GenerateMode = PromptMode | 'image';
+
+function formatBuildMode(mode?: SavedModel['mode']) {
+  switch (mode) {
+    case 'image':
+      return 'Image';
+    case 'morph':
+      return 'Rebuild';
+    case 'import':
+      return 'Import';
+    case 'create':
+    default:
+      return 'Prompt';
+  }
+}
 
 export default function Generator() {
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -52,6 +67,7 @@ export default function Generator() {
   const [appState, setAppState] = useState<AppState>(AppState.STABLE);
   const [currentBaseModel, setCurrentBaseModel] = useState('Eagle');
   const [currentModelData, setCurrentModelData] = useState<VoxelData[]>([]);
+  const [currentModelBricks, setCurrentModelBricks] = useState<BrickData[]>([]);
   const [customBuilds, setCustomBuilds] = useState<SavedModel[]>([]);
   const [customRebuilds, setCustomRebuilds] = useState<SavedModel[]>([]);
   const [history, setHistory] = useState<BuildHistory[]>(INITIAL_HISTORY);
@@ -63,6 +79,71 @@ export default function Generator() {
   const [promptMode, setPromptMode] = useState<PromptMode | null>(null);
   const [referenceImage, setReferenceImage] = useState<{ base64: string; mimeType: string; preview: string } | null>(null);
   const [isVoxelizing, setIsVoxelizing] = useState(false);
+  const [isLoadingSavedBuilds, setIsLoadingSavedBuilds] = useState(true);
+  const [databaseRecords, setDatabaseRecords] = useState<PersistedBuildRecord[]>([]);
+  const [databasePath, setDatabasePath] = useState('');
+  const [databaseOpen, setDatabaseOpen] = useState(false);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [isDeletingRecord, setIsDeletingRecord] = useState(false);
+
+  const selectedRecord = useMemo(
+    () => databaseRecords.find((record) => record.id === selectedRecordId) || databaseRecords[0] || null,
+    [databaseRecords, selectedRecordId]
+  );
+
+  const loadSavedBuilds = useCallback(async () => {
+    setIsLoadingSavedBuilds(true);
+
+    try {
+      const response = await fetch('/api/builds');
+      if (!response.ok) {
+        throw new Error('Failed to load saved builds');
+      }
+
+      const payload = await response.json();
+      const records = Array.isArray(payload?.records) ? payload.records as PersistedBuildRecord[] : [];
+
+      setDatabaseRecords(records);
+      setDatabasePath(typeof payload?.databasePath === 'string' ? payload.databasePath : '');
+      setSelectedRecordId((current) => current && records.some((record) => record.id === current) ? current : records[0]?.id ?? null);
+      setCustomBuilds(
+        records
+          .filter((record) => record.mode === 'create' || record.mode === 'image' || record.mode === 'import')
+          .map((record) => ({
+            id: record.id,
+            name: record.name,
+            prompt: record.prompt,
+            mode: record.mode,
+            createdAt: record.createdAt,
+            data: record.data,
+            bricks: voxelsToBricks(record.data),
+          }))
+      );
+      setCustomRebuilds(
+        records
+          .filter((record) => record.mode === 'morph')
+          .map((record) => ({
+            id: record.id,
+            name: record.name,
+            prompt: record.prompt,
+            mode: record.mode,
+            createdAt: record.createdAt,
+            baseModel: record.baseModel || undefined,
+            data: record.data,
+            bricks: voxelsToBricks(record.data),
+          }))
+      );
+      setHistory(
+        records.map((record) => ({
+          id: record.id,
+          prompt: record.name,
+          timestamp: record.createdAt,
+        }))
+      );
+    } finally {
+      setIsLoadingSavedBuilds(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!viewerRef.current) {
@@ -72,9 +153,11 @@ export default function Generator() {
     const engine = new VoxelEngine(viewerRef.current, setAppState, setVoxelCount);
     engineRef.current = engine;
     const initialModel = Generators.Eagle();
-    engine.loadInitialModel(initialModel);
+    const initialBricks = voxelsToBricks(initialModel);
+    engine.loadInitialModel(initialModel, initialBricks);
     setCurrentModelData(initialModel);
-    syncPartsFromVoxels(initialModel);
+    setCurrentModelBricks(initialBricks);
+    syncPartsFromBricks(initialBricks);
 
     const handleResize = () => engine.handleResize();
     const resizeObserver = new ResizeObserver(() => engine.handleResize());
@@ -87,6 +170,20 @@ export default function Generator() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    loadSavedBuilds().catch((error) => {
+      if (!cancelled) {
+        console.error('Failed to load saved builds:', error);
+        setIsLoadingSavedBuilds(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSavedBuilds]);
+
   const relevantRebuilds = useMemo(
     () => customRebuilds.filter((item) => item.baseModel === currentBaseModel),
     [customRebuilds, currentBaseModel]
@@ -96,35 +193,92 @@ export default function Generator() {
   const canBreak = appState === AppState.STABLE && modelLoaded;
   const canRebuild = appState === AppState.DISMANTLING && !isGenerating;
 
-  function syncPartsFromVoxels(data: VoxelData[]) {
-    const counts = new Map<number, number>();
-    data.forEach((voxel) => {
-      counts.set(voxel.color, (counts.get(voxel.color) || 0) + 1);
+  function syncPartsFromBricks(bricks: BrickData[]) {
+    const counts = new Map<string, { color: number; type: string; count: number }>();
+    bricks.forEach((brick) => {
+      const key = `${brick.type}-${brick.color}`;
+      const current = counts.get(key);
+      counts.set(key, {
+        color: brick.color,
+        type: brick.type,
+        count: (current?.count || 0) + 1,
+      });
     });
-    const generatedParts: LegoPart[] = Array.from(counts.entries()).map(([color, count], index) => ({
-      id: `${color}-${index}`,
-      name: '1x1 Brick',
-      code: `Voxel #${index + 1}`,
-      color: `#${color.toString(16).padStart(6, '0')}`,
-      count,
+    const generatedParts: LegoPart[] = Array.from(counts.values()).map((item, index) => ({
+      id: `${item.type}-${item.color}-${index}`,
+      name: `${item.type} Brick`,
+      code: `Part #${index + 1}`,
+      color: `#${item.color.toString(16).padStart(6, '0')}`,
+      count: item.count,
     }));
     setParts(generatedParts);
   }
 
-  function loadModel(name: string, data: VoxelData[]) {
-    engineRef.current?.loadInitialModel(data);
+  function loadModel(name: string, data: VoxelData[], bricks = voxelsToBricks(data)) {
+    engineRef.current?.loadInitialModel(data, bricks);
     setCurrentBaseModel(name);
     setCurrentModelData(data);
-    syncPartsFromVoxels(data);
+    setCurrentModelBricks(bricks);
+    syncPartsFromBricks(bricks);
     setHistory((prev) => [{ id: `${Date.now()}`, prompt: name, timestamp: Date.now() }, ...prev.slice(0, 19)]);
   }
 
-  function rebuildModel(name: string, data: VoxelData[]) {
-    engineRef.current?.rebuild(data);
-    engineRef.current?.focusModel(data);
+  function rebuildModel(name: string, data: VoxelData[], bricks = voxelsToBricks(data)) {
+    engineRef.current?.rebuild(data, bricks);
+    engineRef.current?.focusModel(data, bricks);
     setCurrentModelData(data);
-    syncPartsFromVoxels(data);
+    setCurrentModelBricks(bricks);
+    syncPartsFromBricks(bricks);
     setHistory((prev) => [{ id: `${Date.now()}`, prompt: `${currentBaseModel} -> ${name}`, timestamp: Date.now() }, ...prev.slice(0, 19)]);
+  }
+
+  async function persistBuild(build: {
+    name: string;
+    prompt?: string;
+    mode: 'create' | 'morph' | 'image' | 'import';
+    baseModel?: string | null;
+    data: VoxelData[];
+  }) {
+    try {
+      const response = await fetch('/api/builds', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(build),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save build');
+      }
+
+      const payload = await response.json();
+      const record = payload?.record as PersistedBuildRecord | undefined;
+      if (!record) {
+        return;
+      }
+
+      const savedModel: SavedModel = {
+        id: record.id,
+        name: record.name,
+        prompt: record.prompt,
+        mode: record.mode,
+        createdAt: record.createdAt,
+        baseModel: record.baseModel || undefined,
+        data: record.data,
+        bricks: voxelsToBricks(record.data),
+      };
+
+      if (record.mode === 'morph') {
+        setCustomRebuilds((prev) => [savedModel, ...prev.filter((item) => item.id !== record.id)]);
+      } else {
+        setCustomBuilds((prev) => [savedModel, ...prev.filter((item) => item.id !== record.id)]);
+      }
+      setDatabaseRecords((prev) => [record, ...prev.filter((item) => item.id !== record.id)]);
+      setSelectedRecordId(record.id);
+    } catch (error) {
+      console.error('Failed to persist build:', error);
+    }
   }
 
   function handlePresetBuild(name: 'Eagle') {
@@ -139,6 +293,30 @@ export default function Generator() {
     const next = !isAutoRotate;
     setIsAutoRotate(next);
     engineRef.current?.setAutoRotate(next);
+  }
+
+  function handleLoadSavedBuild(build: SavedModel) {
+    loadModel(build.name, build.data, build.bricks);
+  }
+
+  async function handleDeleteRecord(id: string) {
+    setIsDeletingRecord(true);
+    try {
+      const response = await fetch(`/api/builds?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete build');
+      }
+
+      await loadSavedBuilds();
+    } catch (error) {
+      console.error('Failed to delete build:', error);
+      window.alert('Delete failed.');
+    } finally {
+      setIsDeletingRecord(false);
+    }
   }
 
   async function handleGenerate(mode: GenerateMode) {
@@ -161,8 +339,6 @@ export default function Generator() {
         mode === 'morph' && engineRef.current
           ? `Try to stay close to these existing colors: ${engineRef.current.getUniqueColors().join(', ')}.`
           : 'Choose colors that make the build readable and playful.';
-
-      let voxelData: VoxelData[] = [];
 
       const response = await fetch('/api/generate-voxel', {
         method: 'POST',
@@ -188,7 +364,8 @@ export default function Generator() {
       }
 
       const payload = await response.json();
-      voxelData = Array.isArray(payload?.voxels) ? payload.voxels : [];
+      const voxelData: VoxelData[] = Array.isArray(payload?.voxels) ? payload.voxels : [];
+      const brickData = normalizeBricks(payload?.bricks, voxelData);
 
       if (!voxelData.length) {
         throw new Error('Model generation returned an empty voxel list');
@@ -197,12 +374,18 @@ export default function Generator() {
       const buildName = mode === 'image' ? 'Photo Build' : (prompt || 'New Build');
 
       if (mode === 'create' || mode === 'image') {
-        loadModel(buildName, voxelData);
-        setCustomBuilds((prev) => [...prev, { name: buildName, data: voxelData }]);
+        loadModel(buildName, voxelData, brickData);
       } else {
-        rebuildModel(buildName, voxelData);
-        setCustomRebuilds((prev) => [...prev, { name: buildName, data: voxelData, baseModel: currentBaseModel }]);
+        rebuildModel(buildName, voxelData, brickData);
       }
+
+      await persistBuild({
+        name: buildName,
+        prompt,
+        mode,
+        baseModel: mode === 'morph' ? currentBaseModel : null,
+        data: voxelData,
+      });
 
       if (mode !== 'image') {
         setPrompt('');
@@ -210,7 +393,7 @@ export default function Generator() {
       setReferenceImage(null);
     } catch (error) {
       console.error('Generation failed:', error);
-      window.alert('Generation failed. On Vercel, please set server environment variable GEMINI_API_KEY.');
+      window.alert('Generation failed. Please check that the server API is running and GEMINI_API_KEY is configured on the server.');
     } finally {
       setIsGenerating(false);
       setIsVoxelizing(false);
@@ -254,7 +437,15 @@ export default function Generator() {
               : Number.parseInt(String(colorValue || 'cccccc'), 16) || 0xcccccc,
         };
       });
-      loadModel('Imported Build', voxelData);
+      const brickData = voxelsToBricks(voxelData);
+      loadModel('Imported Build', voxelData, brickData);
+      void persistBuild({
+        name: 'Imported Build',
+        prompt: 'Imported from JSON blueprint',
+        mode: 'import',
+        baseModel: null,
+        data: voxelData,
+      });
       setJsonMode(null);
     } catch (error) {
       setJsonError('Invalid JSON format.');
@@ -313,6 +504,13 @@ export default function Generator() {
             >
               {isGenerating && promptMode === 'create' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
               Generate New Build
+            </button>
+            <button
+              onClick={openImportModal}
+              className="stud-button w-full py-3 bg-surface-container-high text-on-surface rounded-xl font-bold flex items-center justify-center gap-2 border border-outline-variant/20"
+            >
+              <Upload className="w-4 h-4" />
+              Import JSON Blueprint
             </button>
           </div>
 
@@ -379,7 +577,45 @@ export default function Generator() {
             )}
           </div>
 
-          <div className="flex flex-col gap-3 overflow-hidden h-[240px] shrink-0 mt-auto">
+          <div className="flex flex-col gap-3 overflow-hidden h-[240px] shrink-0">
+            <div className="flex items-center justify-between shrink-0">
+              <h3 className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant">Saved Builds</h3>
+              <span className="text-[10px] text-on-surface-variant">{customBuilds.length} items</span>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2 min-h-0">
+              {isLoadingSavedBuilds ? (
+                <div className="rounded-xl bg-surface-container-high px-4 py-3 border border-outline-variant/10 text-sm text-on-surface-variant">
+                  Loading saved builds...
+                </div>
+              ) : customBuilds.length > 0 ? (
+                customBuilds.map((item, index) => (
+                  <button
+                    key={item.id || `${item.name}-${index}`}
+                    onClick={() => handleLoadSavedBuild(item)}
+                    className="w-full rounded-xl bg-surface-container-high px-4 py-3 border border-outline-variant/10 text-left hover:bg-surface-bright transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-on-surface truncate">{item.name}</div>
+                        <div className="text-[10px] uppercase tracking-wider text-on-surface-variant">
+                          {item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Saved build'}
+                        </div>
+                      </div>
+                      <span className="rounded-md bg-surface-container-lowest px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-tertiary shrink-0">
+                        {formatBuildMode(item.mode)}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-xl bg-surface-container-high px-4 py-3 border border-outline-variant/10 text-sm text-on-surface-variant">
+                  Your generated and imported builds will appear here.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 overflow-hidden h-[220px] shrink-0 mt-auto">
             <div className="flex items-center justify-between shrink-0">
               <h3 className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant">History</h3>
               <span className="text-[10px] text-on-surface-variant">{history.length} entries</span>
@@ -441,6 +677,13 @@ export default function Generator() {
               title="Export JSON"
             >
               <Code2 className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => setDatabaseOpen(true)}
+              className="p-2 hover:bg-surface-bright rounded-full text-on-surface-variant hover:text-tertiary transition-all"
+              title="Database Panel"
+            >
+              <Database className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -506,7 +749,7 @@ export default function Generator() {
             Break
           </button>
           <button
-            onClick={() => rebuildModel(currentBaseModel, currentModelData)}
+            onClick={() => rebuildModel(currentBaseModel, currentModelData, currentModelBricks)}
             disabled={!canRebuild}
             className="stud-button px-5 py-3 rounded-xl bg-secondary text-on-secondary font-headline font-bold flex items-center gap-2 disabled:opacity-50"
           >
@@ -588,7 +831,7 @@ export default function Generator() {
                 {relevantRebuilds.map((item, index) => (
                   <button
                     key={`${item.name}-${index}`}
-                    onClick={() => rebuildModel(item.name, item.data)}
+                    onClick={() => rebuildModel(item.name, item.data, item.bricks)}
                     disabled={!canRebuild}
                     className="w-full rounded-xl bg-surface-container-high px-4 py-3 text-left border border-outline-variant/20 disabled:opacity-50 shrink-0"
                   >
@@ -662,6 +905,158 @@ export default function Generator() {
                     <Upload className="w-4 h-4" />
                     Import
                   </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {databaseOpen && (
+        <div className="absolute inset-0 z-[75] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="w-full max-w-6xl h-[80vh] rounded-3xl bg-surface-container-high border border-outline-variant/20 shadow-2xl overflow-hidden flex">
+            <div className="w-[360px] border-r border-outline-variant/10 bg-surface-container/70 flex flex-col min-h-0">
+              <div className="px-6 py-5 border-b border-outline-variant/10 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-bold text-on-surface">Database Panel</h3>
+                    <p className="text-xs uppercase tracking-widest text-on-surface-variant">Saved Builds</p>
+                  </div>
+                  <button
+                    onClick={() => setDatabaseOpen(false)}
+                    className="p-2 rounded-xl hover:bg-surface-bright text-on-surface-variant"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="rounded-xl bg-surface-container-lowest/70 border border-outline-variant/10 p-3">
+                  <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">Database File</div>
+                  <div className="text-xs text-on-surface break-all">{databasePath || 'Loading...'}</div>
+                </div>
+                <button
+                  onClick={() => loadSavedBuilds().catch((error) => console.error(error))}
+                  className="stud-button w-full py-3 bg-surface-container-high text-on-surface rounded-xl font-bold flex items-center justify-center gap-2 border border-outline-variant/20"
+                >
+                  <RefreshCw className={cn('w-4 h-4', isLoadingSavedBuilds && 'animate-spin')} />
+                  Refresh Records
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-2 min-h-0">
+                {databaseRecords.length > 0 ? (
+                  databaseRecords.map((record) => (
+                    <button
+                      key={record.id}
+                      onClick={() => setSelectedRecordId(record.id)}
+                      className={cn(
+                        'w-full rounded-xl border px-4 py-3 text-left transition-all',
+                        selectedRecord?.id === record.id
+                          ? 'bg-tertiary/12 border-tertiary/40'
+                          : 'bg-surface-container-high border-outline-variant/10 hover:bg-surface-bright'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-on-surface truncate">{record.name}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-on-surface-variant">
+                            {new Date(record.createdAt).toLocaleString()}
+                          </div>
+                        </div>
+                        <span className="rounded-md bg-surface-container-lowest px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-tertiary shrink-0">
+                          {formatBuildMode(record.mode)}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-on-surface-variant">{record.voxelCount} voxels</div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-xl bg-surface-container-high px-4 py-3 border border-outline-variant/10 text-sm text-on-surface-variant">
+                    No records in the database yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-0 flex flex-col">
+              <div className="px-6 py-5 border-b border-outline-variant/10 flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-on-surface-variant">Selected Record</div>
+                  <div className="text-xl font-bold text-on-surface">{selectedRecord?.name || 'No record selected'}</div>
+                </div>
+                {selectedRecord && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => handleLoadSavedBuild({
+                        id: selectedRecord.id,
+                        name: selectedRecord.name,
+                        prompt: selectedRecord.prompt,
+                        mode: selectedRecord.mode,
+                        createdAt: selectedRecord.createdAt,
+                        baseModel: selectedRecord.baseModel || undefined,
+                        data: selectedRecord.data,
+                        bricks: voxelsToBricks(selectedRecord.data),
+                      })}
+                      className="stud-button px-4 py-3 rounded-xl bg-primary text-on-primary font-bold"
+                    >
+                      Load Build
+                    </button>
+                    <button
+                      onClick={() => handleDeleteRecord(selectedRecord.id)}
+                      disabled={isDeletingRecord}
+                      className="stud-button px-4 py-3 rounded-xl bg-surface-container-low text-primary font-bold border border-outline-variant/20 flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+                {selectedRecord ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="rounded-2xl bg-surface-container-low p-4 border border-outline-variant/10">
+                        <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Mode</div>
+                        <div className="text-sm font-bold text-on-surface">{formatBuildMode(selectedRecord.mode)}</div>
+                      </div>
+                      <div className="rounded-2xl bg-surface-container-low p-4 border border-outline-variant/10">
+                        <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Voxel Count</div>
+                        <div className="text-sm font-bold text-on-surface">{selectedRecord.voxelCount}</div>
+                      </div>
+                      <div className="rounded-2xl bg-surface-container-low p-4 border border-outline-variant/10">
+                        <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Base Model</div>
+                        <div className="text-sm font-bold text-on-surface">{selectedRecord.baseModel || 'None'}</div>
+                      </div>
+                      <div className="rounded-2xl bg-surface-container-low p-4 border border-outline-variant/10">
+                        <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Created At</div>
+                        <div className="text-sm font-bold text-on-surface">{new Date(selectedRecord.createdAt).toLocaleString()}</div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-surface-container-low p-5 border border-outline-variant/10">
+                      <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Prompt</div>
+                      <div className="text-sm text-on-surface whitespace-pre-wrap break-words">
+                        {selectedRecord.prompt || 'No prompt stored for this record.'}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-surface-container-low p-5 border border-outline-variant/10">
+                      <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-2">Voxel JSON Preview</div>
+                      <textarea
+                        readOnly
+                        value={JSON.stringify(selectedRecord.data.slice(0, 80), null, 2)}
+                        className="w-full h-[280px] rounded-2xl bg-surface-container-lowest border border-outline-variant/20 p-4 font-mono text-xs text-on-surface resize-none outline-none"
+                      />
+                      <div className="mt-2 text-xs text-on-surface-variant">
+                        Showing the first {Math.min(selectedRecord.data.length, 80)} voxels from this record.
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-2xl bg-surface-container-low p-5 border border-outline-variant/10 text-on-surface-variant">
+                    Pick a record from the left to inspect what is stored in the database.
+                  </div>
                 )}
               </div>
             </div>
