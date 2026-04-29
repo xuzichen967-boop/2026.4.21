@@ -146,6 +146,16 @@ export const Generators = {
     setBlock(map, 0, 10, -5, COLORS.GOLD);
     setBlock(map, 0, 10, -6, COLORS.TALON);
 
+    // Extra feather texture raises the model detail without globally scaling it.
+    [-11, -9, -7, -5].forEach((x, index) => {
+      addBox(x, x + 1, 3 + index % 2, 4 + index % 2, -3, -2, COLORS.WOOD);
+      addBox(-x - 1, -x, 3 + index % 2, 4 + index % 2, -3, -2, COLORS.WOOD);
+    });
+    [-3, -1, 1, 3].forEach((x) => {
+      setBlock(map, x, 5, -4, COLORS.LIGHT);
+      setBlock(map, x, 6, -4, COLORS.LIGHT);
+    });
+
     return Array.from(map.values());
   },
 

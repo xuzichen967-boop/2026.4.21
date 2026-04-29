@@ -314,7 +314,7 @@ export class VoxelEngine {
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
     const horizontalFov = 2 * Math.atan(Math.tan(fov / 2) * aspect);
     const fitFov = Math.min(fov, horizontalFov);
-    const distance = (this.framingRadius * 1.7) / Math.tan(fitFov / 2);
+    const distance = (this.framingRadius * 1.25) / Math.tan(fitFov / 2);
 
     this.controls.target.lerp(this.framingCenter, 1);
     this.camera.position.set(
@@ -323,6 +323,10 @@ export class VoxelEngine {
       this.framingCenter.z + distance
     );
     this.camera.lookAt(this.framingCenter);
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = Math.max(80, distance * 0.85);
+      this.scene.fog.far = Math.max(220, distance + this.framingRadius * 3);
+    }
     this.controls.update();
   }
 
