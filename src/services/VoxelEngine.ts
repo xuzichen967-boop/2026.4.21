@@ -13,6 +13,8 @@ export class VoxelEngine {
   private controls: OrbitControls;
   private brickBodyMesh: THREE.InstancedMesh | null = null;
   private brickStudMesh: THREE.InstancedMesh | null = null;
+  private brickUndersideMesh: THREE.InstancedMesh | null = null;
+  private brickTubeMesh: THREE.InstancedMesh | null = null;
   private dummy = new THREE.Object3D();
   private bricks: SimulationBrick[] = [];
   private rebuildTargets: RebuildTarget[] = [];
@@ -43,6 +45,9 @@ export class VoxelEngine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -53,14 +58,14 @@ export class VoxelEngine {
     this.controls.autoRotateSpeed = 0.5;
     this.controls.target.set(0, 5, 0);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.72);
     this.scene.add(ambientLight);
 
-    const rimLight = new THREE.DirectionalLight(0xaec8ff, 0.75);
+    const rimLight = new THREE.DirectionalLight(0xbfd4ff, 1.1);
     rimLight.position.set(-40, 50, -20);
     this.scene.add(rimLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.05);
     dirLight.position.set(50, 80, 30);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 2048;
@@ -218,6 +223,8 @@ export class VoxelEngine {
     cancelAnimationFrame(this.animationId);
     this.disposeInstancedMesh(this.brickBodyMesh);
     this.disposeInstancedMesh(this.brickStudMesh);
+    this.disposeInstancedMesh(this.brickUndersideMesh);
+    this.disposeInstancedMesh(this.brickTubeMesh);
     this.container.removeChild(this.renderer.domElement);
     this.renderer.dispose();
   }
@@ -225,8 +232,12 @@ export class VoxelEngine {
   private createBricks(data: BrickData[]) {
     this.disposeInstancedMesh(this.brickBodyMesh);
     this.disposeInstancedMesh(this.brickStudMesh);
+    this.disposeInstancedMesh(this.brickUndersideMesh);
+    this.disposeInstancedMesh(this.brickTubeMesh);
     this.brickBodyMesh = null;
     this.brickStudMesh = null;
+    this.brickUndersideMesh = null;
+    this.brickTubeMesh = null;
 
     this.bricks = data.map((brick, i) => {
       const color = new THREE.Color(brick.color);
@@ -254,37 +265,77 @@ export class VoxelEngine {
     });
 
     const brickSize = CONFIG.VOXEL_SIZE;
-    const bodyHeight = brickSize * 0.9;
-    const studRadius = brickSize * 0.22;
-    const studHeight = brickSize * 0.12;
+    const bodyHeight = brickSize * 0.78;
+    const studRadius = brickSize * 0.285;
+    const studHeight = brickSize * 0.2;
+    const undersideHeight = brickSize * 0.035;
+    const tubeRadius = brickSize * 0.22;
+    const tubeHeight = brickSize * 0.32;
     const bodyGeometry = new RoundedBoxGeometry(
-      brickSize - 0.01,
+      brickSize * 0.92,
       bodyHeight,
-      brickSize - 0.01,
-      3,
-      brickSize * 0.06
+      brickSize * 0.92,
+      5,
+      brickSize * 0.045
     );
-    const studGeometry = new THREE.CylinderGeometry(studRadius, studRadius, studHeight, 24);
+    const studGeometry = new THREE.CylinderGeometry(studRadius * 0.94, studRadius, studHeight, 36, 1);
+    const undersideGeometry = new RoundedBoxGeometry(
+      brickSize * 0.62,
+      undersideHeight,
+      brickSize * 0.62,
+      3,
+      brickSize * 0.025
+    );
+    const tubeGeometry = new THREE.CylinderGeometry(tubeRadius, tubeRadius, tubeHeight, 32, 1, true);
 
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      roughness: 0.42,
+    const bodyMaterial = new THREE.MeshPhysicalMaterial({
+      roughness: 0.26,
       metalness: 0.02,
-      envMapIntensity: 0.6,
+      clearcoat: 0.55,
+      clearcoatRoughness: 0.32,
+      envMapIntensity: 0.95,
     });
-    const studMaterial = new THREE.MeshStandardMaterial({
-      roughness: 0.35,
+    const studMaterial = new THREE.MeshPhysicalMaterial({
+      roughness: 0.2,
       metalness: 0.03,
-      envMapIntensity: 0.7,
+      clearcoat: 0.7,
+      clearcoatRoughness: 0.24,
+      envMapIntensity: 1.1,
+    });
+    const undersideMaterial = new THREE.MeshStandardMaterial({
+      roughness: 0.7,
+      metalness: 0,
+      envMapIntensity: 0.2,
+    });
+    const tubeMaterial = new THREE.MeshPhysicalMaterial({
+      roughness: 0.34,
+      metalness: 0.02,
+      clearcoat: 0.35,
+      clearcoatRoughness: 0.42,
+      envMapIntensity: 0.65,
+      side: THREE.DoubleSide,
     });
 
     const studCount = Math.max(1, this.getTotalCells());
     this.brickBodyMesh = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, Math.max(1, this.bricks.length));
     this.brickStudMesh = new THREE.InstancedMesh(studGeometry, studMaterial, studCount);
+    this.brickUndersideMesh = new THREE.InstancedMesh(
+      undersideGeometry,
+      undersideMaterial,
+      Math.max(1, this.bricks.length)
+    );
+    this.brickTubeMesh = new THREE.InstancedMesh(tubeGeometry, tubeMaterial, studCount);
     this.brickBodyMesh.castShadow = true;
     this.brickBodyMesh.receiveShadow = true;
     this.brickStudMesh.castShadow = true;
     this.brickStudMesh.receiveShadow = true;
+    this.brickUndersideMesh.castShadow = true;
+    this.brickUndersideMesh.receiveShadow = true;
+    this.brickTubeMesh.castShadow = true;
+    this.brickTubeMesh.receiveShadow = true;
     this.scene.add(this.brickBodyMesh);
+    this.scene.add(this.brickUndersideMesh);
+    this.scene.add(this.brickTubeMesh);
     this.scene.add(this.brickStudMesh);
     this.draw();
   }
@@ -320,7 +371,7 @@ export class VoxelEngine {
     this.camera.position.set(
       this.framingCenter.x + distance * 0.62,
       this.framingCenter.y + distance * 0.52,
-      this.framingCenter.z + distance
+      this.framingCenter.z - distance
     );
     this.camera.lookAt(this.framingCenter);
     if (this.scene.fog instanceof THREE.Fog) {
@@ -331,16 +382,20 @@ export class VoxelEngine {
   }
 
   private draw() {
-    if (!this.brickBodyMesh || !this.brickStudMesh) {
+    if (!this.brickBodyMesh || !this.brickStudMesh || !this.brickUndersideMesh || !this.brickTubeMesh) {
       return;
     }
 
     const brickSize = CONFIG.VOXEL_SIZE;
-    const bodyHeight = brickSize * 0.9;
-    const studHeight = brickSize * 0.12;
+    const bodyHeight = brickSize * 0.78;
+    const studHeight = brickSize * 0.2;
+    const undersideHeight = brickSize * 0.035;
+    const tubeHeight = brickSize * 0.32;
     const verticalOverlap = 0.02;
     const bodyOffsetY = (brickSize - bodyHeight) / 2 - verticalOverlap;
-    const studOffsetY = bodyOffsetY + bodyHeight / 2 + studHeight / 2 - 0.005;
+    const studOffsetY = bodyOffsetY + bodyHeight / 2 + studHeight / 2 - 0.012;
+    const undersideOffsetY = bodyOffsetY - bodyHeight / 2 - undersideHeight / 2 + 0.02;
+    const tubeOffsetY = bodyOffsetY - bodyHeight / 2 + tubeHeight / 2 + 0.035;
     const coveredStudScale = 0.0001;
 
     const occupied = new Set<string>();
@@ -361,9 +416,21 @@ export class VoxelEngine {
       this.dummy.updateMatrix();
       this.brickBodyMesh?.setMatrixAt(i, this.dummy.matrix);
       this.brickBodyMesh?.setColorAt(i, brick.color);
+
+      this.dummy.position.set(
+        brick.x + (brick.width - 1) / 2,
+        brick.y + undersideOffsetY,
+        brick.z + (brick.depth - 1) / 2
+      );
+      this.dummy.rotation.set(brick.rx, brick.ry, brick.rz);
+      this.dummy.scale.set(Math.max(0.62, brick.width * 1.18), 1, Math.max(0.62, brick.depth * 1.18));
+      this.dummy.updateMatrix();
+      this.brickUndersideMesh?.setMatrixAt(i, this.dummy.matrix);
+      this.brickUndersideMesh?.setColorAt(i, brick.color.clone().offsetHSL(0, -0.08, -0.28));
     });
 
     let studIndex = 0;
+    let tubeIndex = 0;
     this.bricks.forEach((brick) => {
       const centerX = brick.x + (brick.width - 1) / 2;
       const centerZ = brick.z + (brick.depth - 1) / 2;
@@ -387,6 +454,14 @@ export class VoxelEngine {
         this.brickStudMesh?.setMatrixAt(studIndex, this.dummy.matrix);
         this.brickStudMesh?.setColorAt(studIndex, brick.color.clone().offsetHSL(0, 0, 0.06));
         studIndex++;
+
+        this.dummy.position.set(centerX + localOffset.x, brick.y + tubeOffsetY + localOffset.y, centerZ + localOffset.z);
+        this.dummy.rotation.set(brick.rx, brick.ry, brick.rz);
+        this.dummy.scale.set(1, 1, 1);
+        this.dummy.updateMatrix();
+        this.brickTubeMesh?.setMatrixAt(tubeIndex, this.dummy.matrix);
+        this.brickTubeMesh?.setColorAt(tubeIndex, brick.color.clone().offsetHSL(0, -0.02, -0.16));
+        tubeIndex++;
       });
     });
 
@@ -394,6 +469,10 @@ export class VoxelEngine {
     this.brickBodyMesh.instanceColor!.needsUpdate = true;
     this.brickStudMesh.instanceMatrix.needsUpdate = true;
     this.brickStudMesh.instanceColor!.needsUpdate = true;
+    this.brickUndersideMesh.instanceMatrix.needsUpdate = true;
+    this.brickUndersideMesh.instanceColor!.needsUpdate = true;
+    this.brickTubeMesh.instanceMatrix.needsUpdate = true;
+    this.brickTubeMesh.instanceColor!.needsUpdate = true;
   }
 
   private getColorDist(c1: THREE.Color, hex2: number) {

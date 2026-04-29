@@ -8,6 +8,7 @@ import {
   Code2,
   Copy,
   Database,
+  Dog,
   Download,
   Hammer,
   Image as ImageIcon,
@@ -65,7 +66,7 @@ export default function Generator() {
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [voxelCount, setVoxelCount] = useState(0);
   const [appState, setAppState] = useState<AppState>(AppState.STABLE);
-  const [currentBaseModel, setCurrentBaseModel] = useState('Eagle');
+  const [currentBaseModel, setCurrentBaseModel] = useState('Fox');
   const [currentModelData, setCurrentModelData] = useState<VoxelData[]>([]);
   const [currentModelBricks, setCurrentModelBricks] = useState<BrickData[]>([]);
   const [customBuilds, setCustomBuilds] = useState<SavedModel[]>([]);
@@ -152,7 +153,7 @@ export default function Generator() {
 
     const engine = new VoxelEngine(viewerRef.current, setAppState, setVoxelCount);
     engineRef.current = engine;
-    const initialModel = Generators.Eagle();
+    const initialModel = Generators.Fox();
     const initialBricks = voxelsToBricks(initialModel);
     engine.loadInitialModel(initialModel, initialBricks);
     setCurrentModelData(initialModel);
@@ -281,11 +282,11 @@ export default function Generator() {
     }
   }
 
-  function handlePresetBuild(name: 'Eagle') {
+  function handlePresetBuild(name: 'Eagle' | 'Fox') {
     loadModel(name, Generators[name]());
   }
 
-  function handlePresetRebuild(name: 'Cat' | 'Rabbit' | 'Twins') {
+  function handlePresetRebuild(name: 'Cat' | 'Rabbit' | 'Twins' | 'Fox') {
     rebuildModel(name, Generators[name]());
   }
 
@@ -335,6 +336,27 @@ export default function Generator() {
     }
 
     try {
+      const normalizedPrompt = prompt.trim().toLowerCase();
+      const shouldUseLocalFox =
+        mode === 'create' &&
+        (normalizedPrompt.includes('fox') || normalizedPrompt.includes('狐狸') || normalizedPrompt.includes('小狐狸'));
+
+      if (shouldUseLocalFox) {
+        const voxelData = Generators.Fox();
+        const brickData = voxelsToBricks(voxelData);
+        loadModel('Small Fox', voxelData, brickData);
+        await persistBuild({
+          name: 'Small Fox',
+          prompt,
+          mode: 'create',
+          baseModel: null,
+          data: voxelData,
+        });
+        setPrompt('');
+        setReferenceImage(null);
+        return;
+      }
+
       const paletteHint =
         mode === 'morph' && engineRef.current
           ? `Try to stay close to these existing colors: ${engineRef.current.getUniqueColors().join(', ')}.`
@@ -820,6 +842,14 @@ export default function Generator() {
               >
                 <Rabbit className="w-4 h-4 text-tertiary group-hover:scale-110 transition-transform" />
                 Rabbit
+              </button>
+              <button
+                onClick={() => handlePresetRebuild('Fox')}
+                disabled={!canRebuild}
+                className="stud-button py-3 rounded-xl bg-surface-container-high text-on-surface font-headline font-bold disabled:opacity-50 flex items-center justify-center gap-2 border border-outline-variant/10 hover:bg-surface-bright transition-all group"
+              >
+                <Dog className="w-4 h-4 text-primary group-hover:scale-110 transition-transform" />
+                Fox
               </button>
             </div>
           </div>

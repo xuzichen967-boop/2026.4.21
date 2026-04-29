@@ -140,11 +140,9 @@ export const Generators = {
     setBlock(map, -1, 13, -2, COLORS.DARK);
     setBlock(map, 1, 13, -2, COLORS.DARK);
 
-    // A larger stepped beak reads better from the camera angle while remaining vertically supported.
-    addBox(0, 0, 10, 12, -4, -4, COLORS.GOLD);
-    setBlock(map, 0, 11, -5, COLORS.GOLD);
-    setBlock(map, 0, 10, -5, COLORS.GOLD);
-    setBlock(map, 0, 10, -6, COLORS.TALON);
+    // Short supported beak. Keep it over the face footprint so support repair does not create a yellow column.
+    addBox(0, 0, 10, 11, -4, -4, COLORS.GOLD);
+    setBlock(map, 0, 9, -4, COLORS.DARK);
 
     // Extra feather texture raises the model detail without globally scaling it.
     [-11, -9, -7, -5].forEach((x, index) => {
@@ -200,6 +198,71 @@ export const Generators = {
     setBlock(map, cx - 1, chy + 0.5, cz + 3, COLORS.BLACK);
     setBlock(map, cx + 1, chy + 0.5, cz + 3, COLORS.BLACK);
     setBlock(map, cx, chy, cz + 3, COLORS.TALON);
+    return Array.from(map.values());
+  },
+
+  Fox: (): VoxelData[] => {
+    const map = new Map<string, VoxelData>();
+    const baseY = CONFIG.FLOOR_Y + 1;
+
+    const addBox = (
+      x1: number,
+      x2: number,
+      y1: number,
+      y2: number,
+      z1: number,
+      z2: number,
+      color: number
+    ) => {
+      for (let x = x1; x <= x2; x++) {
+        for (let y = y1; y <= y2; y++) {
+          for (let z = z1; z <= z2; z++) {
+            setBlock(map, x, y, z, color);
+          }
+        }
+      }
+    };
+
+    // Low, long body so the silhouette reads as a fox rather than a generic cat.
+    generateSphere(map, -2, baseY + 3, 0, 3.3, COLORS.FOX, 0.75);
+    generateSphere(map, 2, baseY + 3, 0, 3.1, COLORS.FOX, 0.72);
+    addBox(-3, 3, baseY + 1, baseY + 2, -2, 2, COLORS.FOX);
+    addBox(-1, 3, baseY + 1, baseY + 2, -3, -3, COLORS.WHITE);
+
+    // Four supported legs and dark paws.
+    [-4, -1, 2, 5].forEach((x) => {
+      addBox(x, x + 1, CONFIG.FLOOR_Y, baseY + 1, -1, 0, COLORS.FOX_DARK);
+      setBlock(map, x, CONFIG.FLOOR_Y, -2, COLORS.FOX_DARK);
+      setBlock(map, x + 1, CONFIG.FLOOR_Y, -2, COLORS.FOX_DARK);
+    });
+
+    // Big bushy tail curls upward behind the body, with a white supported tip.
+    addBox(-8, -5, baseY + 1, baseY + 2, 1, 3, COLORS.FOX);
+    addBox(-10, -7, baseY + 2, baseY + 4, 2, 4, COLORS.FOX);
+    addBox(-11, -9, baseY + 4, baseY + 6, 3, 5, COLORS.FOX);
+    addBox(-12, -10, baseY + 5, baseY + 6, 4, 5, COLORS.WHITE);
+    setBlock(map, -12, baseY + 4, 4, COLORS.WHITE);
+
+    // Head, cheeks, pointed muzzle, and ears. Front is negative z, matching the app camera.
+    generateSphere(map, 5, baseY + 6, -1, 2.8, COLORS.FOX, 0.85);
+    addBox(4, 6, baseY + 4, baseY + 5, -4, -3, COLORS.WHITE);
+    addBox(5, 5, baseY + 5, baseY + 6, -5, -4, COLORS.WHITE);
+    setBlock(map, 5, baseY + 5, -6, COLORS.BLACK);
+
+    addBox(3, 4, baseY + 8, baseY + 10, -1, 0, COLORS.FOX);
+    addBox(6, 7, baseY + 8, baseY + 10, -1, 0, COLORS.FOX);
+    setBlock(map, 4, baseY + 9, -1, COLORS.WHITE);
+    setBlock(map, 6, baseY + 9, -1, COLORS.WHITE);
+
+    setBlock(map, 4, baseY + 6, -4, COLORS.BLACK);
+    setBlock(map, 6, baseY + 6, -4, COLORS.BLACK);
+    setBlock(map, 4, baseY + 7, -3, COLORS.FOX_DARK);
+    setBlock(map, 6, baseY + 7, -3, COLORS.FOX_DARK);
+
+    // A few same-color contour bands add life without creating floating freckles.
+    addBox(-4, 1, baseY + 5, baseY + 5, -2, -2, COLORS.LIGHT);
+    addBox(-2, 4, baseY + 4, baseY + 4, 2, 2, COLORS.FOX_DARK);
+
     return Array.from(map.values());
   },
 

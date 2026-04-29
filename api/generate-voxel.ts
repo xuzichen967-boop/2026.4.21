@@ -428,75 +428,112 @@ function voxelToBricks(
 
 function buildBricksForTargetRange(voxels: Array<{ x: number; y: number; z: number; color: number }>) {
   const originalBricks = voxelToBricks(voxels);
-  if (originalBricks.length >= 600 && originalBricks.length <= 1000) {
-    return { voxels, bricks: originalBricks, enhanced: false };
-  }
-  if (originalBricks.length > 1000) {
+  if (isTargetBrickCount(originalBricks)) {
     return { voxels, bricks: originalBricks, enhanced: false };
   }
 
-  const enhancedVoxels = enhanceVoxelResolution(voxels);
-  const enhancedBricks = voxelToBricks(enhancedVoxels);
-  if (enhancedBricks.length >= 600 && enhancedBricks.length <= 1000) {
-    return { voxels: enhancedVoxels, bricks: enhancedBricks, enhanced: true };
+  const candidates = [{ voxels, bricks: originalBricks, enhanced: false }];
+  const voxelTargets = [1300, 1800, 2400, 3200, 4200];
+
+  for (const voxelTarget of voxelTargets) {
+    const enhancedVoxels = enhanceVoxelResolution(voxels, voxelTarget);
+    const enhancedBricks = voxelToBricks(enhancedVoxels);
+    const mediumBricks = voxelToBricks(enhancedVoxels, true);
+    const fusedBricks = mergeCommonBricksTowardTarget(mediumBricks);
+
+    candidates.push(
+      { voxels: enhancedVoxels, bricks: enhancedBricks, enhanced: true },
+      { voxels: enhancedVoxels, bricks: mediumBricks, enhanced: true },
+      { voxels: enhancedVoxels, bricks: fusedBricks, enhanced: true }
+    );
+
+    if (isTargetBrickCount(fusedBricks)) {
+      return { voxels: enhancedVoxels, bricks: fusedBricks, enhanced: true };
+    }
+    if (isTargetBrickCount(mediumBricks)) {
+      return { voxels: enhancedVoxels, bricks: mergeCommonBricksTowardTarget(mediumBricks), enhanced: true };
+    }
+    if (isTargetBrickCount(enhancedBricks)) {
+      return { voxels: enhancedVoxels, bricks: enhancedBricks, enhanced: true };
+    }
   }
 
-  const mediumBricks = voxelToBricks(enhancedVoxels, true);
-  if (mediumBricks.length >= 600 && mediumBricks.length <= 1000) {
-    return { voxels: enhancedVoxels, bricks: mediumBricks, enhanced: true };
-  }
-
-  const balancedBricks = splitTwoByTwoBricksTowardRange(mediumBricks);
-  if (balancedBricks.length >= 600 && balancedBricks.length <= 1000) {
-    return { voxels: enhancedVoxels, bricks: balancedBricks, enhanced: true };
-  }
-
-  const candidates = [
-    { voxels, bricks: originalBricks, enhanced: false },
-    { voxels: enhancedVoxels, bricks: enhancedBricks, enhanced: true },
-    { voxels: enhancedVoxels, bricks: mediumBricks, enhanced: true },
-    { voxels: enhancedVoxels, bricks: balancedBricks, enhanced: true },
-  ].filter((candidate) => candidate.bricks.length <= 1000);
-
-  return candidates.sort((a, b) => Math.abs(a.bricks.length - 800) - Math.abs(b.bricks.length - 800))[0] || {
+  return candidates
+    .sort((a, b) => Math.abs(a.bricks.length - 600) - Math.abs(b.bricks.length - 600))[0] || {
     voxels,
     bricks: originalBricks,
     enhanced: false,
   };
 }
 
-function splitTwoByTwoBricksTowardRange(bricks: Brick[], minimum = 600) {
-  if (bricks.length >= minimum) {
-    return bricks;
+function isTargetBrickCount(bricks: Brick[]) {
+  return bricks.length >= 600;
+}
+
+function getCommonBrickType(width: number, depth: number): BrickType | null {
+  const shortSide = Math.min(width, depth);
+  const longSide = Math.max(width, depth);
+  const key = `${shortSide}x${longSide}`;
+  return ['1x3', '1x4', '2x2', '2x3', '2x4'].includes(key) ? key as BrickType : null;
+}
+
+function tryMergeCommonBrickPair(first: Brick, second: Brick): Brick | null {
+  if (first.y !== second.y || first.color !== second.color) {
+    return null;
   }
 
-  const result: Brick[] = [];
-  let count = bricks.length;
+  const cells = [...first.cells, ...second.cells].map((cell) => ({
+    x: Math.round(cell.x),
+    y: Math.round(cell.y),
+    z: Math.round(cell.z),
+  }));
+  const unique = new Set(cells.map((cell) => cellKey(cell.x, cell.y, cell.z)));
+  if (unique.size !== cells.length) {
+    return null;
+  }
 
-  for (const brick of bricks) {
-    if (count < minimum && brick.width === 2 && brick.depth === 2 && brick.cells.length === 4) {
-      result.push(
-        {
-          ...brick,
-          type: '1x2',
-          width: 1,
-          depth: 2,
-          cells: generateBrickCells(brick.x, brick.y, brick.z, 1, 2),
-        },
-        {
-          ...brick,
-          type: '1x2',
-          width: 1,
-          depth: 2,
-          x: brick.x + 1,
-          cells: generateBrickCells(brick.x + 1, brick.y, brick.z, 1, 2),
-        }
-      );
-      count += 1;
-      continue;
+  const xs = cells.map((cell) => cell.x);
+  const zs = cells.map((cell) => cell.z);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minZ = Math.min(...zs);
+  const maxZ = Math.max(...zs);
+  const width = maxX - minX + 1;
+  const depth = maxZ - minZ + 1;
+  const type = getCommonBrickType(width, depth);
+
+  if (!type || width * depth !== cells.length) {
+    return null;
+  }
+
+  return {
+    ...first,
+    type,
+    x: minX,
+    z: minZ,
+    width,
+    depth,
+    cells: generateBrickCells(minX, first.y, minZ, width, depth),
+  };
+}
+
+function mergeCommonBricksTowardTarget(bricks: Brick[], minimum = Math.max(600, Math.floor(bricks.length * 0.82))) {
+  const result = [...bricks];
+
+  for (let i = 0; i < result.length; i++) {
+    for (let j = i + 1; j < result.length; j++) {
+      const merged = tryMergeCommonBrickPair(result[i], result[j]);
+      if (!merged) {
+        continue;
+      }
+      if (result.length - 1 < minimum) {
+        continue;
+      }
+
+      result[i] = merged;
+      result.splice(j, 1);
+      j = i;
     }
-
-    result.push(brick);
   }
 
   return result.map((brick, index) => ({ ...brick, id: `B${index + 1}` }));
@@ -680,16 +717,19 @@ function enhanceVoxelResolution(
 
   const enhanced = new Map<string, { x: number; y: number; z: number; color: number }>();
   const scaleY = 1;
+  const scaleXZ = source.size * 4 < minimumVoxels ? 3 : 2;
   source.forEach((voxel) => {
-    addEnhancedVoxel(enhanced, voxel.x * 2, voxel.y * scaleY, voxel.z * 2, voxel.color);
-    addEnhancedVoxel(enhanced, voxel.x * 2 + 1, voxel.y * scaleY, voxel.z * 2, voxel.color);
-    addEnhancedVoxel(enhanced, voxel.x * 2, voxel.y * scaleY, voxel.z * 2 + 1, voxel.color);
-    addEnhancedVoxel(enhanced, voxel.x * 2 + 1, voxel.y * scaleY, voxel.z * 2 + 1, voxel.color);
+    for (let dx = 0; dx < scaleXZ; dx++) {
+      for (let dz = 0; dz < scaleXZ; dz++) {
+        addEnhancedVoxel(enhanced, voxel.x * scaleXZ + dx, voxel.y * scaleY, voxel.z * scaleXZ + dz, voxel.color);
+      }
+    }
     if (scaleY > 1) {
-      addEnhancedVoxel(enhanced, voxel.x * 2, voxel.y * scaleY + 1, voxel.z * 2, voxel.color);
-      addEnhancedVoxel(enhanced, voxel.x * 2 + 1, voxel.y * scaleY + 1, voxel.z * 2, voxel.color);
-      addEnhancedVoxel(enhanced, voxel.x * 2, voxel.y * scaleY + 1, voxel.z * 2 + 1, voxel.color);
-      addEnhancedVoxel(enhanced, voxel.x * 2 + 1, voxel.y * scaleY + 1, voxel.z * 2 + 1, voxel.color);
+      for (let dx = 0; dx < scaleXZ; dx++) {
+        for (let dz = 0; dz < scaleXZ; dz++) {
+          addEnhancedVoxel(enhanced, voxel.x * scaleXZ + dx, voxel.y * scaleY + 1, voxel.z * scaleXZ + dz, voxel.color);
+        }
+      }
     }
   });
 
@@ -716,16 +756,16 @@ function enhanceVoxelResolution(
         return;
       }
       addUntilTarget(
-        voxel.x * 2 + neighbor.dx,
+        voxel.x * scaleXZ + neighbor.dx,
         voxel.y * scaleY,
-        voxel.z * 2 + neighbor.dz,
+        voxel.z * scaleXZ + neighbor.dz,
         voxel.color
       );
       if (scaleY > 1) {
         addUntilTarget(
-          voxel.x * 2 + neighbor.dx,
+          voxel.x * scaleXZ + neighbor.dx,
           voxel.y * scaleY + 1,
-          voxel.z * 2 + neighbor.dz,
+          voxel.z * scaleXZ + neighbor.dz,
           voxel.color
         );
       }
@@ -733,9 +773,9 @@ function enhanceVoxelResolution(
 
     const openSideCount = neighbors.filter((neighbor) => !source.has(cellKey(voxel.x + neighbor.dx, voxel.y, voxel.z + neighbor.dz))).length;
     if (openSideCount >= 2) {
-      addUntilTarget(voxel.x * 2, voxel.y * scaleY, voxel.z * 2 + 1, voxel.color);
+      addUntilTarget(voxel.x * scaleXZ, voxel.y * scaleY, voxel.z * scaleXZ + 1, voxel.color);
       if (scaleY > 1) {
-        addUntilTarget(voxel.x * 2, voxel.y * scaleY + 1, voxel.z * 2 + 1, voxel.color);
+        addUntilTarget(voxel.x * scaleXZ, voxel.y * scaleY + 1, voxel.z * scaleXZ + 1, voxel.color);
       }
     }
   });
@@ -745,7 +785,7 @@ function enhanceVoxelResolution(
       return;
     }
     if (!source.has(cellKey(voxel.x, voxel.y + 1, voxel.z))) {
-      addUntilTarget(voxel.x * 2, voxel.y + 1, voxel.z * 2, voxel.color);
+      addUntilTarget(voxel.x * scaleXZ, voxel.y + 1, voxel.z * scaleXZ, voxel.color);
     }
   });
 
@@ -844,7 +884,7 @@ function stabilizeBrickSupports(bricks: Brick[], preferMediumParts = false): Bri
       if (hasBrickSupport(brick, occupied, ownKeys)) {
         continue;
       }
-      changed = moveBrickDown(brick, occupied, colorMap) || addSupportColumns(brick, occupied, colorMap) || changed;
+      changed = addSupportColumns(brick, occupied, colorMap) || moveBrickDown(brick, occupied, colorMap) || changed;
     }
 
     stableBricks = buildBricksFromColorMap(occupied, colorMap, preferMediumParts);
@@ -1447,7 +1487,9 @@ export default async function handler(req: any, res: any) {
     const compactResult = compactVoxelsForTightContact(finalVoxels);
     finalVoxels = compactResult.compacted;
 
-    let bricks = voxelToBricks(finalVoxels);
+    let finalTargetedBuild = buildBricksForTargetRange(finalVoxels);
+    finalVoxels = finalTargetedBuild.voxels;
+    let bricks = finalTargetedBuild.bricks;
     finalVoxels = bricksToVoxels(bricks);
     let connectionValidation = validateBrickConnectivity(bricks);
     let manufacturability = validateManufacturability(finalVoxels, bricks, connectionValidation);
@@ -1460,7 +1502,9 @@ export default async function handler(req: any, res: any) {
         addedBridgeVoxels: repairStats.addedBridgeVoxels + repaired.stats.addedBridgeVoxels,
         repaired: repairStats.repaired || repaired.stats.repaired,
       };
-      bricks = voxelToBricks(finalVoxels);
+      finalTargetedBuild = buildBricksForTargetRange(finalVoxels);
+      finalVoxels = finalTargetedBuild.voxels;
+      bricks = finalTargetedBuild.bricks;
       finalVoxels = bricksToVoxels(bricks);
       connectionValidation = validateBrickConnectivity(bricks);
       manufacturability = validateManufacturability(finalVoxels, bricks, connectionValidation);
@@ -1475,7 +1519,7 @@ export default async function handler(req: any, res: any) {
       manufacturability,
       repairStats: {
         ...repairStats,
-        resolutionEnhanced: targetedBuild.enhanced,
+        resolutionEnhanced: targetedBuild.enhanced || finalTargetedBuild.enhanced,
         gravityMovedVoxels: gravityResult.movedCount,
         compactMovedVoxels: compactResult.movedCount,
       },
