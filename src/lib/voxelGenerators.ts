@@ -267,6 +267,73 @@ export const Generators = {
     return Array.from(map.values());
   },
 
+  Tiger: (): VoxelData[] => {
+    const map = new Map<string, VoxelData>();
+    const footY = CONFIG.FLOOR_Y;
+
+    const addBox = (
+      x1: number,
+      x2: number,
+      y1: number,
+      y2: number,
+      z1: number,
+      z2: number,
+      color: number
+    ) => {
+      for (let x = x1; x <= x2; x++) {
+        for (let y = y1; y <= y2; y++) {
+          for (let z = z1; z <= z2; z++) {
+            setBlock(map, x, y, z, color);
+          }
+        }
+      }
+    };
+
+    // Standing tiger body with enough height to avoid the flat-animal problem.
+    generateSphere(map, -2, footY + 5, 0, 3.8, COLORS.TIGER, 0.95);
+    generateSphere(map, 2, footY + 5, 0, 3.6, COLORS.TIGER, 0.92);
+    addBox(-4, 4, footY + 3, footY + 6, -3, 2, COLORS.TIGER);
+    addBox(-2, 3, footY + 3, footY + 4, -4, -4, COLORS.WHITE);
+
+    // Four sturdy legs and paws.
+    [-4, -1, 2, 5].forEach((x) => {
+      addBox(x, x + 1, footY, footY + 4, -1, 1, COLORS.TIGER);
+      addBox(x, x + 1, footY, footY, -2, 1, COLORS.TIGER_STRIPE);
+    });
+
+    // Raised head and muzzle, facing negative z.
+    generateSphere(map, 5, footY + 8, -1, 3.1, COLORS.TIGER, 0.9);
+    addBox(3, 7, footY + 6, footY + 8, -4, -3, COLORS.WHITE);
+    addBox(4, 6, footY + 7, footY + 8, -5, -4, COLORS.WHITE);
+    setBlock(map, 5, footY + 7, -6, COLORS.BLACK);
+
+    // Rounded ears with dark backs.
+    addBox(3, 4, footY + 10, footY + 12, -1, 0, COLORS.TIGER);
+    addBox(6, 7, footY + 10, footY + 12, -1, 0, COLORS.TIGER);
+    setBlock(map, 3, footY + 11, -1, COLORS.TIGER_STRIPE);
+    setBlock(map, 7, footY + 11, -1, COLORS.TIGER_STRIPE);
+
+    // Eyes, brow, and forehead stripe pattern.
+    setBlock(map, 4, footY + 8, -4, COLORS.BLACK);
+    setBlock(map, 6, footY + 8, -4, COLORS.BLACK);
+    addBox(4, 6, footY + 10, footY + 10, -4, -4, COLORS.TIGER_STRIPE);
+    setBlock(map, 5, footY + 11, -3, COLORS.TIGER_STRIPE);
+
+    // Body stripes are same-layer supported bands, not floating specks.
+    [-5, -2, 1, 4].forEach((x, index) => {
+      addBox(x, x, footY + 5, footY + 8, -3, -3, COLORS.TIGER_STRIPE);
+      addBox(x, x, footY + 6 + (index % 2), footY + 7 + (index % 2), 2, 2, COLORS.TIGER_STRIPE);
+    });
+    [-3, 0, 3].forEach((x) => addBox(x, x + 1, footY + 8, footY + 8, -1, 1, COLORS.TIGER_STRIPE));
+
+    // Curved tail with a dark tip.
+    addBox(-8, -5, footY + 3, footY + 4, 2, 3, COLORS.TIGER);
+    addBox(-10, -8, footY + 4, footY + 6, 3, 4, COLORS.TIGER);
+    addBox(-11, -10, footY + 6, footY + 8, 4, 5, COLORS.TIGER_STRIPE);
+
+    return Array.from(map.values());
+  },
+
   Rabbit: (): VoxelData[] => {
     const map = new Map<string, VoxelData>();
     const logY = CONFIG.FLOOR_Y + 2.5;
